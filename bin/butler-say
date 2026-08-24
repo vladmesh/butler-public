@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Send one message to the owner right now, without waiting for the turn to end.
+
+The head calls this from its working directory; the bridge polls the directory named
+by BUTLER_OUTBOX_DIR and delivers whatever appears there, in file-name order.
+
+Deliberately stdlib-only and free of any `butler_bridge` import: the head runs under
+the system python3, which has neither aiogram nor httpx nor this package installed.
+The file-name and atomicity rules below are the whole protocol; the reading half of
+it lives in `butler_bridge/outbox.py`.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+import uuid
+from pathlib import Path
+
+ENV_VAR = "BUTLER_OUTBOX_DIR"
+MESSAGE_SUFFIX = ".msg"
+TMP_SUFFIX = ".tmp"
+
+USAGE = "usage: butler-say <текст>   |   ... | butler-say"
+
+
+def read_text(argv: list[str]) -> str:
+    """Message from the arguments, or from stdin when there are none."""
+    if argv:
+        return " ".join(argv).strip()
+    if sys.stdin.isatty():
+        return ""
+    return sys.stdin.read().strip()
+
+
+def write_message(directory: Path, text: str) -> Path:
+    """Temp file plus rename: the bridge never sees half a message."""
+    name = f"{time.time_ns():020d}-{uuid.uuid4().hex[:8]}"
+    tmp = directory / (name + TMP_SUFFIX)
+    tmp.write_text(text, encoding="utf-8")
+    path = directory / (name + MESSAGE_SUFFIX)
+    tmp.replace(path)
+    return path
+
+
+def main(argv: list[str]) -> int:
+    text = read_text(argv)
+    if not text:
+        print(f"butler-say: пустое сообщение, отправлять нечего\n{USAGE}", file=sys.stderr)
+        return 2
+
+    raw = (os.environ.get(ENV_VAR) or "").strip()
+    if not raw:
+        print(
+            f"butler-say: {ENV_VAR} не задан — этот процесс не тёрн дворецкого",
+            file=sys.stderr,
+        )
+        return 2
+
+    directory = Path(raw)
+    if not directory.is_dir():
+        print(f"butler-say: {ENV_VAR}={raw} — не каталог", file=sys.stderr)
+        return 2
+
+    try:
+        write_message(directory, text)
+    except OSError as exc:
+        print(f"butler-say: не смог записать сообщение в {raw}: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

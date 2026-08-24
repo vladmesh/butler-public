@@ -1,0 +1,13 @@
+.env
+# Runtime state stays out of git — the digest included: it is the owner's working set,
+# not a product artifact. Its starting shape ships as state/digest.example.md.
+state/*
+!state/digest.example.md
+__pycache__/
+*.pyc
+.venv/
+skills/*
+!skills/.gitkeep
+/CLAUDE.md
+.pytest_cache/
+*.egg-info/

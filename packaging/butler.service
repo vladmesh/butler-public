@@ -1,0 +1,19 @@
+[Unit]
+Description=Butler telegram bridge
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/dev/butler
+EnvironmentFile=/home/dev/butler/.env
+Environment=PATH=/home/dev/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/dev/butler/.venv/bin/python -m butler_bridge
+Restart=always
+RestartSec=5
+# Must stay above BUTLER_SHUTDOWN_GRACE_S (default 300): the bridge finishes the turn it
+# is on before it exits, and systemd has to outwait that, or its SIGKILL lands in the
+# middle of the answer. Raising the variable means raising this too.
+TimeoutStopSec=330
+
+[Install]
+WantedBy=default.target
