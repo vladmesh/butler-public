@@ -1,10 +1,10 @@
 # Butler — спецификация MVP
 
 Внешний агент-дворецкий: принимает голосовухи владельца в Telegram, отвечает текстом,
-имеет полные полномочия на этой машине и по SSH. Наблюдает за пайплайном секретаря,
+имеет полные полномочия на этой машине и по SSH. Наблюдает за пайплайном Ummanu,
 но НЕ является его частью: ничего в этом репо не должно зависеть от работоспособности
-диспетчера, Orca или `secretary reconcile`. Единственные допустимые точки касания
-секретаря — memory-mcp (read), CLI `secretary ...` (изнутри головы) и симлинки скиллов.
+диспетчера, Orca или `ummanu reconcile`. Единственные допустимые точки касания
+Ummanu — memory-mcp (read), CLI `ummanu ...` (изнутри головы) и симлинки скиллов.
 
 Все дизайн-решения зафиксированы гриллингом 2026-08-13 (12 пунктов, см. DESIGN.md).
 Этот файл — имплементационная спека каркаса.
@@ -70,7 +70,7 @@ butler/
 
 ```
 BUTLER_TG_TOKEN=            # токен бота от BotFather
-BUTLER_ADMIN_ID=            # telegram id владельца (см. TELEGRAM_ID_ADMIN у секретаря)
+BUTLER_ADMIN_ID=            # telegram id владельца (см. TELEGRAM_ID_ADMIN у Ummanu)
 GROQ_API_KEY=               # free tier, транскрипция
 OPENROUTER_API_KEY=         # фоллбек транскрипции (опционально; нет ключа → фоллбек выключен)
 BUTLER_WORKDIR=/home/dev/butler
@@ -124,8 +124,8 @@ BUTLER_STT_OPENROUTER_MODEL=openai/whisper-large-v3-turbo
   `[voice transcript, может содержать ошибки распознавания]`.
 
 ### 4.3 Выбор головы (`heads.py`)
-- Probe в духе `health.resolve_head` секретаря, но своя минимальная реализация
-  (НЕ импортировать код секретаря — только паттерн):
+- Probe в духе `head_health.resolve_head_chain` Ummanu, но своя минимальная реализация
+  (НЕ импортировать код Ummanu — только паттерн):
   - claude: `claude -p --model haiku "ok"` с таймаутом 30s, exit 0 и непустой stdout → зелёный.
   - codex: `codex exec -m gpt-5.4-mini "say ok"` аналогично.
 - Кэш результата probe в памяти процесса с TTL 300s (не гонять токен на каждое сообщение).
@@ -276,7 +276,7 @@ BUTLER_STT_OPENROUTER_MODEL=openai/whisper-large-v3-turbo
 
 - Что он делает, задаётся его промптом (`SERVICE_TURN_PROMPT`), а не кодом: переписать
   `state/digest.md` под текущее положение дел, вынести долгоиграющие факты через
-  `secretary memory` (`commit` для «запомни» владельца, `propose` для своих выводов) и
+  `ummanu memory` (`commit` для «запомни» владельца, `propose` для своих выводов) и
   дописать привычки в секцию `## Выучено` персоны отдельным git-коммитом. Мост его только
   запускает и проверяет, что он оставил после себя.
 - Владельцу он не пишет: `BUTLER_OUTBOX_DIR` уходит в него пустым, поэтому
@@ -397,7 +397,7 @@ BUTLER_STT_OPENROUTER_MODEL=openai/whisper-large-v3-turbo
 
 ## 5. systemd (`packaging/butler.service`)
 
-User-unit (`systemctl --user`), по образцу секретарских юнитов:
+User-unit (`systemctl --user`), по образцу юнитов Ummanu:
 ```
 [Unit]
 Description=Butler telegram bridge
@@ -439,7 +439,7 @@ WantedBy=default.target
 
 README описывает установку: `python -m venv .venv && .venv/bin/pip install -e .`,
 `cp .env.example .env`, заполнить, `systemctl --user enable --now butler` (симлинк юнита
-в `~/.config/systemd/user/`). Никакого участия `secretary reconcile`.
+в `~/.config/systemd/user/`). Никакого участия `ummanu reconcile`.
 
 ## 6. Логи
 - stdout моста → journald (стандартно для systemd). Формат: одна строка на событие,
@@ -467,9 +467,9 @@ README описывает установку: `python -m venv .venv && .venv/bin
 - Протокол подтверждения: необратимое или наружу (деплой, удаление данных, рестарт
   прод-сервисов, force-push, траты) → сначала переспросить одним сообщением. Остальное
   (статусы, спринты, карточки, пинки пайплайна, прогон меги) — делать молча.
-- Память: memory-mcp на чтение; «запомни: ...» от владельца → `secretary memory commit`
-  напрямую (actor butler); собственные выводы → `secretary memory propose`.
-- Секретарь: статусы через `secretary status`, `secretary sprint ...`, доска Kanboard.
+- Память: memory-mcp на чтение; «запомни: ...» от владельца → `/home/dev/ummanu/.venv/bin/ummanu memory commit`
+  напрямую (actor butler); собственные выводы → `/home/dev/ummanu/.venv/bin/ummanu memory propose`.
+- Ummanu: статусы через `ummanu status`, `ummanu sprint ...`, доска в PostgreSQL.
   Ты наблюдатель с правами, но не часть пайплайна — не претендуй на его карточки.
 - Сообщение посреди тёрна: `bin/butler-say "текст"` из рабочего каталога — когда работа
   затянулась, когда запущена джоба, когда найден промежуточный результат. Владелец видит
@@ -490,7 +490,8 @@ README описывает установку: `python -m venv .venv && .venv/bin
 - `.mcp.json` в BUTLER_WORKDIR: `{"mcpServers": {"memory": {"type": "http", "url": "http://127.0.0.1:8077/mcp"}}}`
   (проверить актуальный формат конфига для streamable-http).
 - Симлинки продуктовых скиллов: `skills/` дворецкого + симлинк на
-  `/home/dev/secretary/skills/roles/secretary/{open-sprint,spec-card,knowledge-doc}`.
+  `/home/dev/ummanu/skills/roles/ummanu/{open-sprint,knowledge-doc}` (`spec-card` в Ummanu
+  больше нет).
   Симлинки создаются README-командой, в git не коммитятся (пути машинные).
 
 ## 9. Чего в MVP НЕТ (не реализовывать, только не мешать будущему)

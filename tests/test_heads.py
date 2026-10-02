@@ -101,7 +101,7 @@ def write_codex_message(text: str, stdout: str):
 
 
 def _fake_probe(table: dict[str, bool]):
-    async def fake_probe(head, cwd=None):
+    async def fake_probe(head, cwd=None, model=None):
         return table[head]
 
     return fake_probe
@@ -137,6 +137,21 @@ async def test_missing_binary_is_red_and_lets_codex_take_over(monkeypatch, confi
 
     monkeypatch.setattr(heads, "run_process", FakeRunner([_run]))
     assert await resolve_head(config, ProbeCache()) == CODEX
+
+
+async def test_codex_probe_uses_configured_model(monkeypatch, config):
+    config = replace(config, codex_model="account-supported-model")
+
+    def _run(cmd):
+        if cmd[0] == "claude":
+            return ProcResult(exit_code=1, stdout="weekly limit")
+        assert cmd[cmd.index("-m") + 1] == config.codex_model
+        return ok("OK")
+
+    runner = FakeRunner([_run])
+    monkeypatch.setattr(heads, "run_process", runner)
+    assert await resolve_head(config, ProbeCache()) == CODEX
+    assert len(runner.calls) == 2
 
 
 async def test_run_process_reports_missing_binary_instead_of_raising(config):
@@ -224,7 +239,7 @@ async def test_resolve_head_raises_when_both_red(monkeypatch, config):
 async def test_probe_result_is_cached_within_ttl(monkeypatch, config):
     calls: list[str] = []
 
-    async def fake_probe(head, cwd=None):
+    async def fake_probe(head, cwd=None, model=None):
         calls.append(head)
         return True
 

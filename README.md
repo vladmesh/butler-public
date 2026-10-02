@@ -10,9 +10,8 @@
 cd /home/dev/butler
 python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env    # заполнить: токен бота, admin id, GROQ_API_KEY
-ln -sfn /home/dev/secretary/skills/roles/secretary/open-sprint   skills/open-sprint
-ln -sfn /home/dev/secretary/skills/roles/secretary/spec-card     skills/spec-card
-ln -sfn /home/dev/secretary/skills/roles/secretary/knowledge-doc skills/knowledge-doc
+ln -sfn /home/dev/ummanu/skills/roles/ummanu/open-sprint   skills/open-sprint
+ln -sfn /home/dev/ummanu/skills/roles/ummanu/knowledge-doc skills/knowledge-doc
 ln -sfn packaging/butler.service ~/.config/systemd/user/butler.service
 systemctl --user daemon-reload && systemctl --user enable --now butler
 ```
@@ -21,7 +20,8 @@ systemctl --user daemon-reload && systemctl --user enable --now butler
 с заполненным — начинает long polling. `.env` читается из корня репо самим
 конфигом (переменные окружения приоритетнее; путь переопределяется `BUTLER_ENV_FILE`),
 так что запуск руками и под systemd ведут себя одинаково. Логи: `journalctl --user -u butler -f`.
-`secretary reconcile` в установке не участвует.
+`ummanu reconcile` в установке не участвует. Скилла `spec-card` в Ummanu больше нет,
+его симлинка тоже нет; старый висячий `skills/spec-card` удали: `rm skills/spec-card`.
 
 `systemctl --user restart butler` можно делать на живом мосту: по SIGTERM он перестаёт
 принимать сообщения, договаривает идущий тёрн и только потом выходит (§4.9 спеки).

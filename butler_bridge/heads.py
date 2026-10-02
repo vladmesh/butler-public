@@ -1,6 +1,6 @@
 """Head selection and spawning: claude first, codex as fallback.
 
-The pattern follows the secretary's `health.resolve_head`, but nothing is imported
+The pattern follows Ummanu's `head_health.resolve_head_chain`, but nothing is imported
 from that project: this bridge must keep working when the pipeline is broken.
 
 Resume is bound to the dialogue's active head (see state.Dialog): a session id left
@@ -37,7 +37,7 @@ HEADS = (CLAUDE, CODEX)
 PROBE_TTL_S = 300.0
 PROBE_TIMEOUT_S = 30.0
 PROBE_CLAUDE_MODEL = "haiku"
-PROBE_CODEX_MODEL = "gpt-5.4-mini"
+PROBE_CODEX_MODEL = "gpt-5.6-terra"
 
 #: How long to keep draining a killed process's pipes before giving up on its output.
 DRAIN_AFTER_KILL_S = 10.0
@@ -204,17 +204,20 @@ class ProbeCache:
         self._results.clear()
 
 
-def probe_command(head: str) -> list[str]:
+def probe_command(head: str, model: str | None = None) -> list[str]:
     if head == CLAUDE:
         return ["claude", "-p", "--model", PROBE_CLAUDE_MODEL, "ok"]
     if head == CODEX:
-        return ["codex", "exec", "-m", PROBE_CODEX_MODEL, "--skip-git-repo-check", "say ok"]
+        return [
+            "codex", "exec", "-m", model or PROBE_CODEX_MODEL, "--skip-git-repo-check",
+            "Reply only OK. Do not use tools.",
+        ]
     raise ValueError(f"unknown head {head!r}")
 
 
-async def probe(head: str, cwd: Path | None = None) -> bool:
+async def probe(head: str, cwd: Path | None = None, model: str | None = None) -> bool:
     """Green when the CLI exits 0 with non-empty stdout inside PROBE_TIMEOUT_S."""
-    result = await run_process(probe_command(head), cwd=cwd, timeout=PROBE_TIMEOUT_S)
+    result = await run_process(probe_command(head, model=model), cwd=cwd, timeout=PROBE_TIMEOUT_S)
     green = result.ok and bool(result.stdout.strip())
     event(
         "probe",
@@ -232,7 +235,10 @@ async def resolve_head(config: Config, cache: ProbeCache) -> str:
     for head in HEADS:
         cached = cache.get(head)
         if cached is None:
-            cached = await probe(head, cwd=config.workdir)
+            cached = await probe(
+                head, cwd=config.workdir,
+                model=config.codex_model if head == CODEX else None,
+            )
             cache.put(head, cached)
         if cached:
             return head
@@ -438,6 +444,18 @@ def build_codex_command(
     return cmd
 
 
+def missing_claude_session(result: ProcResult, session_id: str | None) -> bool:
+    """Recognize only Claude's exact missing-resume error, never an executed turn."""
+    return bool(
+        session_id
+        and result.exit_code == 1
+        and not result.timed_out
+        and result.launch_error is None
+        and not result.stdout.strip()
+        and result.stderr.strip() == f"No conversation found with session ID: {session_id}"
+    )
+
+
 def parse_claude_output(stdout: str) -> tuple[str, str | None]:
     """`--output-format json` gives one object with `result` and `session_id`."""
     stdout = stdout.strip()
@@ -603,8 +621,8 @@ SERVICE_TURN_PROMPT = """\
    джобы и где их логи. Закрытое, отменённое и уже неактуальное выкинь — это рабочий
    набор, а не журнал. Разделы файла сохрани.
 2. Долгоиграющие факты — в память, по правилам персоны: то, что владелец просил
-   запомнить, — `secretary memory commit` от actor `butler`; свои выводы —
-   `secretary memory propose`. В дайджесте им делать нечего.
+   запомнить, — `/home/dev/ummanu/.venv/bin/ummanu memory commit` от actor `butler`;
+   свои выводы — `/home/dev/ummanu/.venv/bin/ummanu memory propose`. В дайджесте им делать нечего.
 3. Привычки и выводы о том, как работать с владельцем, — в секцию `## Выучено` в
    `persona/PERSONA.md`, одной-двумя строками каждый. Меняй только эту секцию: всё
    остальное в файле — контракт, правки в нём мост откатит. Сделай этой правке
@@ -778,6 +796,8 @@ async def run_service_turn(
             codex.cleanup()
 
     reason = service_failure_reason(result, text)
+    if head == CLAUDE and missing_claude_session(result, session_id):
+        reason = "missing_session"
     log_path = _write_log(state, f"{head}-service", result) if reason else None
     event(
         "service_turn_done",
@@ -816,6 +836,11 @@ async def handover_and_rotate(
     # being torn down and anything put into it now would be swept undelivered. Skipping
     # it there leaves the line owed in the state, which is the whole point of owing it.
     flush_notices(state, env)
+
+    if outcome.reason == "missing_session":
+        # The provider no longer has this session. Let run_head recover with the
+        # durable history instead of rotating/truncating state or spending retries.
+        return
 
     if outcome.ok:
         state.clear_service_failures()
@@ -896,6 +921,16 @@ async def run_head(
             cmd, cwd=config.workdir, timeout=float(config.head_timeout_s), env=env
         )
         if head == CLAUDE:
+            if missing_claude_session(result, session_id):
+                # Retry only an explicit pre-execution resume rejection. Keep all
+                # durable state until the replacement actually answers successfully.
+                event("head_resume_missing", head=head)
+                preamble = switch_preamble(state)
+                full_prompt = compose_prompt(head, prompt, None, persona, preamble)
+                cmd = build_claude_command(config, full_prompt, None, persona)
+                result = await run_process(
+                    cmd, cwd=config.workdir, timeout=float(config.head_timeout_s), env=env
+                )
             text, new_session = parse_claude_output(result.stdout)
             if not result.ok:
                 # A session id from a failed run is still worth keeping; its text is not.
